@@ -14,8 +14,8 @@ Installation is easiest with Anaconda. Once you have it installed, execute the f
 ```
 conda config --add channels conda-forge
 conda config --set channel_priority strict
-conda create --name neuralpk2 python=3.7.5
-conda activate neuralpk2
+conda create --name neuralpk python=3.7.5
+conda activate neuralpk
 conda install pytorch==1.5 scipy==1.7.3 torchdiffeq==0.2.2 pandas==1.3.5 scikit-learn==1.0.2 jupyterlab tqdm 
 ``` 
 
