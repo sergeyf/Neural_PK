@@ -6,9 +6,10 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torchdiffeq import odeint_adjoint as odeint
+from sklearn.metrics import mean_squared_error, r2_score
 
 import utils
-from evaluation_utils import predict, compute_loss
 from model import Encoder, ODEFunc, Classifier
 from data_parse import parse_tdm1
 from datetime import datetime
@@ -17,6 +18,37 @@ from datetime import datetime
 log_path = "logs/" + f"{datetime.now().strftime('%Y_%m_%d__%H_%M_%S')}.log"
 utils.makedirs("logs/")
 logger = utils.get_logger(logpath=log_path)
+
+
+def load_model(ckpt_path, input_dim, hidden_dim, latent_dim, ode_hidden_dim, device="cpu"):
+    if not os.path.exists(ckpt_path):
+        raise Exception("Checkpoint " + ckpt_path + " does not exist.")
+
+    # create the parts of the model into which we load our checkpoint state
+    encoder = Encoder(input_dim=input_dim, output_dim=2 * latent_dim, hidden_dim=hidden_dim)
+    ode_func = ODEFunc(input_dim=latent_dim, hidden_dim=ode_hidden_dim)
+    classifier = Classifier(latent_dim=latent_dim, output_dim=1)
+
+    checkpt = torch.load(ckpt_path)
+
+    encoder_state = checkpt["encoder"]
+    encoder.load_state_dict(encoder_state)
+    encoder.to(device)
+
+    ode_state = checkpt["ode"]
+    ode_func.load_state_dict(ode_state)
+    ode_func.to(device)
+
+    classifier_state = checkpt["classifier"]
+    classifier.load_state_dict(classifier_state)
+    classifier.to(device)
+
+    return encoder, ode_func, classifier
+
+
+"""
+TRAINING
+"""
 
 
 def train_neural_ode(
@@ -130,33 +162,68 @@ def train_neural_ode(
             logger.info(message)
 
 
-def load_model(ckpt_path, input_dim, hidden_dim, latent_dim, ode_hidden_dim, device="cpu"):
-    if not os.path.exists(ckpt_path):
-        raise Exception("Checkpoint " + ckpt_path + " does not exist.")
+"""
+PREDICTION
+"""
 
-    # create the parts of the model into which we load our checkpoint state
-    encoder = Encoder(input_dim=input_dim, output_dim=2 * latent_dim, hidden_dim=hidden_dim)
-    ode_func = ODEFunc(input_dim=latent_dim, hidden_dim=ode_hidden_dim)
-    classifier = Classifier(latent_dim=latent_dim, output_dim=1)
 
-    checkpt = torch.load(ckpt_path)
+def sample_standard_gaussian(mu, sigma):
+    device = torch.device("cpu")
+    if mu.is_cuda:
+        device = mu.get_device()
 
-    encoder_state = checkpt["encoder"]
-    encoder.load_state_dict(encoder_state)
-    encoder.to(device)
+    d = torch.distributions.normal.Normal(torch.Tensor([0.0]).to(device), torch.Tensor([1.0]).to(device))
+    r = d.sample(mu.size()).squeeze(-1)
+    return r * sigma.float() + mu.float()
 
-    ode_state = checkpt["ode"]
-    ode_func.load_state_dict(ode_state)
-    ode_func.to(device)
 
-    classifier_state = checkpt["classifier"]
-    classifier.load_state_dict(classifier_state)
-    classifier.to(device)
+def predict(encoder, ode_func, classifier, tol, latent_dim, ptnm, times, features, cmax_time):
+    dosing = torch.zeros([features.size(0), features.size(1), latent_dim])
+    dosing[:, :, 0] = features[:, :, -2]
+    dosing = dosing.permute(1, 0, 2)
 
-    return encoder, ode_func, classifier
+    encoder_out = encoder(features)
+    qz0_mean, qz0_var = encoder_out[:, :latent_dim], encoder_out[:, latent_dim:]
+    z0 = sample_standard_gaussian(qz0_mean, qz0_var)
+
+    solves = z0.unsqueeze(0).clone()
+    try:
+        for idx, (time0, time1) in enumerate(zip(times[:-1], times[1:])):
+            z0 += dosing[idx]
+            time_interval = torch.Tensor([time0 - time0, time1 - time0])
+            sol = odeint(ode_func, z0, time_interval, rtol=tol, atol=tol)
+            z0 = sol[-1].clone()
+            solves = torch.cat([solves, sol[-1:, :]], 0)
+    except AssertionError:
+        print(times)
+        print(time0, time1, time_interval, ptnm)
+
+    preds = classifier(solves, cmax_time).permute(1, 0, 2)
+
+    return preds
+
+
+def merge_predictions(evals_per_fold, reference_data):
+    cols = ["PTNM", "TIME", "preds", "labels"]
+    left = evals_per_fold[0][cols]
+    for right in evals_per_fold[1:]:
+        left = left.merge(right[cols], on=["PTNM", "TIME", "labels"], how="left")
+    preds = [col for col in left.columns.values if col.startswith("preds")]
+    left["pred_agg"] = left[preds].agg("mean", axis=1)
+
+    ref = reference_data[["PTNM", "DSFQ"]].drop_duplicates()
+    left = left.merge(ref, on="PTNM", how="left")
+    # get rid of the first round of treatment
+    left_q1w = left[(left.DSFQ == 1) & (left.TIME >= 168)]
+    left_q3w = left[(left.DSFQ == 3) & (left.TIME >= 504)]
+    return pd.concat([left_q1w, left_q3w], ignore_index=False)
 
 
 def predict_using_trained_model(test, model, fold, tol, hidden_dim, latent_dim, ode_hidden_dim):
+    """
+    This method loads the best available model for the specified training and generates predictions.
+    Intended to generate predictions on validation and test sets.
+    """
     # choose whether to use a GPU if it is available
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -190,3 +257,48 @@ def predict_using_trained_model(test, model, fold, tol, hidden_dim, latent_dim, 
     eval_results.to_csv(eval_path, index=False)
 
     return eval_results
+
+
+"""
+EVALUATION 
+"""
+
+
+def compute_loss(encoder, ode_func, classifier, tol, latent_dim, dataloader, n_batches, device, phase):
+    ptnms = []
+    Times = torch.Tensor([]).to(device=device)
+    predictions = torch.Tensor([]).to(device=device)
+    ground_truth = torch.Tensor([]).to(device=device)
+
+    for _ in range(n_batches):
+        ptnm, times, features, labels, cmax_time = dataloader.__next__()
+        preds = predict(encoder, ode_func, classifier, tol, latent_dim, ptnm, times, features, cmax_time)
+
+        idx_not_nan = ~(torch.isnan(labels) | (labels == -1))
+        preds = preds[idx_not_nan]
+        labels = labels[idx_not_nan]
+
+        if phase == "test":
+            times = times[idx_not_nan.flatten()]
+            ptnms += ptnm * len(times)
+            Times = torch.cat(
+                (Times, times * 24)
+            )  # 24 refers to 4 time-dependent features and concatenated zero-padded round 1 features
+
+        predictions = torch.cat((predictions, preds))
+        ground_truth = torch.cat((ground_truth, labels))
+
+    rmse_loss = mean_squared_error(ground_truth.cpu().numpy(), predictions.cpu().numpy(), squared=False)
+    r2 = r2_score(ground_truth.cpu().numpy(), predictions.cpu().numpy())
+
+    if phase == "test":
+        return {
+            "PTNM": ptnms,
+            "TIME": Times,
+            "labels": ground_truth.cpu().tolist(),
+            "preds": predictions.cpu().tolist(),
+            "loss": rmse_loss,
+            "r2": r2,
+        }
+    else:
+        return {"labels": ground_truth.cpu().tolist(), "preds": predictions.cpu().tolist(), "loss": rmse_loss, "r2": r2}
