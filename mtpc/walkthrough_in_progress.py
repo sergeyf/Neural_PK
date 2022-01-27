@@ -1,7 +1,6 @@
 import pandas as pd
 from data_split import data_split, augment_data
-from train_predict_utils import train_neural_ode, predict_using_trained_model
-from evaluation_utils import merge_predictions
+from model_utils import train_neural_ode, predict_using_trained_model, merge_predictions
 from sklearn.metrics import r2_score, mean_squared_error
 from scipy.stats import pearsonr
 
