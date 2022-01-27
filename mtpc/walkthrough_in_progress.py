@@ -223,7 +223,6 @@ summary_df = df.agg(["min", "max", "mean", "median"])
 print(summary_df)
 
 # TODO(anyone):
-# go through and see which utils are never used and delete them
 # add a lot of documentation everywhere
 # convert to jupyter notebook
 # have a discussion of the 3 types of metrics as per Kei's request
