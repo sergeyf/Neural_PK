@@ -22,7 +22,7 @@ conda install pytorch==1.5 scipy==1.7.3 torchdiffeq==0.2.2 pandas==1.3.5 scikit-
 If you have a GPU, note your CUDA version and install the dependencies with the CUDA toolkit. For example,
 if you have CUDA 10.2, you can install the dependencies with the following command:
 ```
-conda install pytorch==1.5 scipy==1.7.3 torchdiffeq==0.2.2 pandas==1.3.5 scikit-learn==1.0.2 jupyterlab tqdm cudatoolkit=10.2
+conda install pytorch==1.5 scipy==1.7.3 torchdiffeq==0.2.2 pandas==1.3.5 scikit-learn==1.0.2 jupyterlab tqdm cudatoolkit=10.2 -c pytorch
 ```
 Only CUDA versions 10.2 and 11.3 are supported at the time of this writing. Please see https://pytorch.org/get-started/locally/
 for more details.
