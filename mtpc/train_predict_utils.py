@@ -12,6 +12,22 @@ import utils
 from evaluation_utils import compute_loss_on_train, compute_loss_on_test
 from model import Encoder, ODEFunc, Classifier
 from data_parse import parse_tdm1
+from datetime import datetime
+
+
+log_path = "logs/" + f"{datetime.now().strftime('%Y_%m_%d__%H_%M_%S')}.log"
+utils.makedirs("logs/")
+logger = utils.get_logger(logpath=log_path)
+
+
+def sample_standard_gaussian(mu, sigma):
+    device = torch.device("cpu")
+    if mu.is_cuda:
+        device = mu.get_device()
+
+    d = torch.distributions.normal.Normal(torch.Tensor([0.0]).to(device), torch.Tensor([1.0]).to(device))
+    r = d.sample(mu.size()).squeeze(-1)
+    return r * sigma.float() + mu.float()
 
 
 def train_neural_ode(
@@ -40,9 +56,6 @@ def train_neural_ode(
     classifier = Classifier(latent_dim=latent_dim, output_dim=1)
 
     # make the logs
-    log_path = "logs/" + f"fold_{fold}_model_{model}.log"
-    utils.makedirs("logs/")
-    logger = utils.get_logger(logpath=log_path)
     logger.info(input_cmd)
 
     batches_per_epoch = tdm1_obj["n_train_batches"]
@@ -64,7 +77,7 @@ def train_neural_ode(
 
             encoder_out = encoder(features)
             qz0_mean, qz0_var = encoder_out[:, :latent_dim], encoder_out[:, latent_dim:]
-            z0 = utils.sample_standard_gaussian(qz0_mean, qz0_var)
+            z0 = sample_standard_gaussian(qz0_mean, qz0_var)
 
             solves = z0.unsqueeze(0).clone()
             try:
