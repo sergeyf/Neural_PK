@@ -14,6 +14,42 @@ from model import Encoder, ODEFunc, Classifier
 from data_parse import parse_tdm1
 
 
+def sample_standard_gaussian(mu, sigma):
+    device = torch.device("cpu")
+    if mu.is_cuda:
+        device = mu.get_device()
+
+    d = torch.distributions.normal.Normal(torch.Tensor([0.0]).to(device), torch.Tensor([1.0]).to(device))
+    r = d.sample(mu.size()).squeeze(-1)
+    return r * sigma.float() + mu.float()
+
+
+def predict(encoder, ode_func, classifier, tol, latent_dim, ptnm, times, features, cmax_time):
+    dosing = torch.zeros([features.size(0), features.size(1), latent_dim])
+    dosing[:, :, 0] = features[:, :, -2]
+    dosing = dosing.permute(1, 0, 2)
+
+    encoder_out = encoder(features)
+    qz0_mean, qz0_var = encoder_out[:, :latent_dim], encoder_out[:, latent_dim:]
+    z0 = sample_standard_gaussian(qz0_mean, qz0_var)
+
+    solves = z0.unsqueeze(0).clone()
+    try:
+        for idx, (time0, time1) in enumerate(zip(times[:-1], times[1:])):
+            z0 += dosing[idx]
+            time_interval = torch.Tensor([time0 - time0, time1 - time0])
+            sol = odeint(ode_func, z0, time_interval, rtol=tol, atol=tol)
+            z0 = sol[-1].clone()
+            solves = torch.cat([solves, sol[-1:, :]], 0)
+    except AssertionError:
+        print(times)
+        print(time0, time1, time_interval, ptnm)
+
+    preds = classifier(solves, cmax_time).permute(1, 0, 2)
+
+    return preds
+
+
 def train_neural_ode(
     random_seed, train, validate, model, fold, lr, tol, epochs, l2, hidden_dim, latent_dim, ode_hidden_dim
 ):
@@ -57,41 +93,20 @@ def train_neural_ode(
         for _ in tqdm(range(batches_per_epoch), ascii=True):
             optimizer.zero_grad()
 
-            ptnms, times, features, labels, cmax_time = tdm1_obj["train_dataloader"].__next__()
-            dosing = torch.zeros([features.size(0), features.size(1), latent_dim])
-            dosing[:, :, 0] = features[:, :, -2]
-            dosing = dosing.permute(1, 0, 2)
-
-            encoder_out = encoder(features)
-            qz0_mean, qz0_var = encoder_out[:, :latent_dim], encoder_out[:, latent_dim:]
-            z0 = utils.sample_standard_gaussian(qz0_mean, qz0_var)
-
-            solves = z0.unsqueeze(0).clone()
-            try:
-                for idx, (time0, time1) in enumerate(zip(times[:-1], times[1:])):
-                    z0 += dosing[idx]
-                    time_interval = torch.Tensor([time0 - time0, time1 - time0])
-                    sol = odeint(ode_func, z0, time_interval, rtol=tol, atol=tol)
-                    z0 = sol[-1].clone()
-                    solves = torch.cat([solves, sol[-1:, :]], 0)
-            except AssertionError:
-                print(times)
-                print(time0, time1, time_interval, ptnms)
-                continue
-
-            preds = classifier(solves, cmax_time)
-
+            ptnm, times, features, labels, cmax_time = tdm1_obj["train_dataloader"].__next__()
+            preds = predict(encoder, ode_func, classifier, tol, latent_dim, ptnm, times, features, cmax_time)
             loss = compute_loss_on_train(criterion, labels, preds)
+
             try:
                 loss.backward()
             except RuntimeError:
-                print(ptnms)
+                print(ptnm)
                 print(times)
                 continue
             optimizer.step()
 
         idx_not_nan = ~(torch.isnan(labels) | (labels == -1))
-        preds = preds.permute(1, 0, 2)[idx_not_nan]
+        preds = preds[idx_not_nan]
         labels = labels[idx_not_nan]
         print(preds)
         print(labels)

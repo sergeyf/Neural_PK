@@ -1,7 +1,7 @@
 import torch
 import pandas as pd
 from sklearn.metrics import mean_squared_error, r2_score
-from torchdiffeq import odeint_adjoint as odeint
+from train_predict_utils import predict
 
 
 def merge_predictions(evals_per_fold, reference_data):
@@ -20,18 +20,7 @@ def merge_predictions(evals_per_fold, reference_data):
     return pd.concat([left_q1w, left_q3w], ignore_index=False)
 
 
-def sample_standard_gaussian(mu, sigma):
-    device = torch.device("cpu")
-    if mu.is_cuda:
-        device = mu.get_device()
-
-    d = torch.distributions.normal.Normal(torch.Tensor([0.0]).to(device), torch.Tensor([1.0]).to(device))
-    r = d.sample(mu.size()).squeeze(-1)
-    return r * sigma.float() + mu.float()
-
-
 def compute_loss_on_train(criterion, labels, preds):
-    preds = preds.permute(1, 0, 2)
     idx_not_nan = ~(torch.isnan(labels) | (labels == -1))
     preds = preds[idx_not_nan]
     labels = labels[idx_not_nan]
@@ -44,50 +33,21 @@ def compute_loss_on_test(encoder, ode_func, classifier, tol, latent_dim, dataloa
     predictions = torch.Tensor([]).to(device=device)
     ground_truth = torch.Tensor([]).to(device=device)
 
-    for itr in range(n_batches):
+    for _ in range(n_batches):
         ptnm, times, features, labels, cmax_time = dataloader.__next__()
-        dosing = torch.zeros([features.size(0), features.size(1), latent_dim])
-        dosing[:, :, 0] = features[:, :, -2]
-        dosing = dosing.permute(1, 0, 2)
+        preds = predict(encoder, ode_func, classifier, tol, latent_dim, ptnm, times, features, cmax_time)
 
-        encoder_out = encoder(features)
-        qz0_mean, qz0_var = encoder_out[:, :latent_dim], encoder_out[:, latent_dim:]
-        z0 = sample_standard_gaussian(qz0_mean, qz0_var)
-
-        solves = z0.unsqueeze(0).clone()
-        try:
-            for idx, (time0, time1) in enumerate(zip(times[:-1], times[1:])):
-                z0 += dosing[idx]
-                time_interval = torch.Tensor([time0 - time0, time1 - time0])
-                sol = odeint(ode_func, z0, time_interval, rtol=tol, atol=tol)
-                z0 = sol[-1].clone()
-                solves = torch.cat([solves, sol[-1:, :]], 0)
-        except AssertionError:
-            print(times)
-            print(time0, time1, time_interval, ptnm)
-            continue
-
-        preds = classifier(solves, cmax_time).permute(1, 0, 2)
+        idx_not_nan = ~(torch.isnan(labels) | (labels == -1))
+        preds = preds[idx_not_nan]
+        labels = labels[idx_not_nan]
 
         if phase == "test":
-            idx_not_nan = ~(torch.isnan(labels) | (labels == -1))
-            preds = preds[idx_not_nan]
-            labels = labels[idx_not_nan]
-
             times = times[idx_not_nan.flatten()]
             ptnms += ptnm * len(times)
             Times = torch.cat((Times, times * 24))
 
-            predictions = torch.cat((predictions, preds))
-            ground_truth = torch.cat((ground_truth, labels))
-
-        else:
-            idx_not_nan = ~(torch.isnan(labels) | (labels == -1))
-            preds = preds[idx_not_nan]
-            labels = labels[idx_not_nan]
-
-            predictions = torch.cat((predictions, preds))
-            ground_truth = torch.cat((ground_truth, labels))
+        predictions = torch.cat((predictions, preds))
+        ground_truth = torch.cat((ground_truth, labels))
 
     rmse_loss = mean_squared_error(ground_truth.cpu().numpy(), predictions.cpu().numpy(), squared=False)
     r2 = r2_score(ground_truth.cpu().numpy(), predictions.cpu().numpy())
