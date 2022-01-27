@@ -6,10 +6,9 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torchdiffeq import odeint_adjoint as odeint
 
 import utils
-from evaluation_utils import compute_loss_on_train, compute_loss_on_test
+from evaluation_utils import predict, compute_loss
 from model import Encoder, ODEFunc, Classifier
 from data_parse import parse_tdm1
 from datetime import datetime
@@ -18,52 +17,6 @@ from datetime import datetime
 log_path = "logs/" + f"{datetime.now().strftime('%Y_%m_%d__%H_%M_%S')}.log"
 utils.makedirs("logs/")
 logger = utils.get_logger(logpath=log_path)
-
-
-def sample_standard_gaussian(mu, sigma):
-    device = torch.device("cpu")
-    if mu.is_cuda:
-        device = mu.get_device()
-
-    d = torch.distributions.normal.Normal(torch.Tensor([0.0]).to(device), torch.Tensor([1.0]).to(device))
-    r = d.sample(mu.size()).squeeze(-1)
-    return r * sigma.float() + mu.float()
-
-
-def sample_standard_gaussian(mu, sigma):
-    device = torch.device("cpu")
-    if mu.is_cuda:
-        device = mu.get_device()
-
-    d = torch.distributions.normal.Normal(torch.Tensor([0.0]).to(device), torch.Tensor([1.0]).to(device))
-    r = d.sample(mu.size()).squeeze(-1)
-    return r * sigma.float() + mu.float()
-
-
-def predict(encoder, ode_func, classifier, tol, latent_dim, ptnm, times, features, cmax_time):
-    dosing = torch.zeros([features.size(0), features.size(1), latent_dim])
-    dosing[:, :, 0] = features[:, :, -2]
-    dosing = dosing.permute(1, 0, 2)
-
-    encoder_out = encoder(features)
-    qz0_mean, qz0_var = encoder_out[:, :latent_dim], encoder_out[:, latent_dim:]
-    z0 = sample_standard_gaussian(qz0_mean, qz0_var)
-
-    solves = z0.unsqueeze(0).clone()
-    try:
-        for idx, (time0, time1) in enumerate(zip(times[:-1], times[1:])):
-            z0 += dosing[idx]
-            time_interval = torch.Tensor([time0 - time0, time1 - time0])
-            sol = odeint(ode_func, z0, time_interval, rtol=tol, atol=tol)
-            z0 = sol[-1].clone()
-            solves = torch.cat([solves, sol[-1:, :]], 0)
-    except AssertionError:
-        print(times)
-        print(time0, time1, time_interval, ptnm)
-
-    preds = classifier(solves, cmax_time).permute(1, 0, 2)
-
-    return preds
 
 
 def train_neural_ode(
@@ -105,11 +58,18 @@ def train_neural_ode(
 
         for _ in tqdm(range(batches_per_epoch), ascii=True):
             optimizer.zero_grad()
-
+            # generate data batch
             ptnm, times, features, labels, cmax_time = tdm1_obj["train_dataloader"].__next__()
+            # get predictions using current state of model
             preds = predict(encoder, ode_func, classifier, tol, latent_dim, ptnm, times, features, cmax_time)
-            loss = compute_loss_on_train(criterion, labels, preds)
+            idx_not_nan = ~(torch.isnan(labels) | (labels == -1))
+            preds = preds[idx_not_nan]
+            labels = labels[idx_not_nan]
 
+            # compute loss of predictions
+            loss = torch.sqrt(criterion(preds, labels))
+
+            # update model based on loss
             try:
                 loss.backward()
             except RuntimeError:
@@ -118,15 +78,9 @@ def train_neural_ode(
                 continue
             optimizer.step()
 
-        idx_not_nan = ~(torch.isnan(labels) | (labels == -1))
-        preds = preds[idx_not_nan]
-        labels = labels[idx_not_nan]
-        print(preds)
-        print(labels)
-
         with torch.no_grad():
-
-            train_res = compute_loss_on_test(
+            # compute training loss on all batches
+            train_res = compute_loss(
                 encoder,
                 ode_func,
                 classifier,
@@ -138,7 +92,8 @@ def train_neural_ode(
                 phase="train",
             )
 
-            validation_res = compute_loss_on_test(
+            # compute validation loss on all batches
+            validation_res = compute_loss(
                 encoder,
                 ode_func,
                 classifier,
@@ -152,6 +107,8 @@ def train_neural_ode(
 
             train_loss = train_res["loss"]
             validation_loss = validation_res["loss"]
+
+            # save model if it beats previous best RMSE (initialized at very high value)
             if validation_loss < best_rmse:
                 torch.save(
                     {
@@ -216,7 +173,7 @@ def predict_using_trained_model(test, model, fold, tol, hidden_dim, latent_dim, 
 
     ## Predict & Evaluate
     with torch.no_grad():
-        test_res = compute_loss_on_test(
+        test_res = compute_loss(
             encoder,
             ode_func,
             classifier,
