@@ -201,7 +201,7 @@ for fold in OUTER_FOLDS:
 Now we can compute evaluation metrics and summarize them
 """
 r2_scores = []
-mses = []
+rmses = []
 pearsonrs = []
 for fold in OUTER_FOLDS:
     # perform the ensembling
@@ -210,12 +210,12 @@ for fold in OUTER_FOLDS:
     # evaluate various metrics
     y_true = predictions["labels"].values
     y_pred = predictions["pred_agg"].values
-    r2_scores.append(mean_squared_error(y_true, y_pred, squared=False))
-    mses.append(r2_score(y_true, y_pred))
+    rmses.append(mean_squared_error(y_true, y_pred, squared=False))
+    r2_scores.append(r2_score(y_true, y_pred))
     pearsonrs.append(pearsonr(y_true, y_pred)[0])
 
 
-df = pd.DataFrame({"R2": r2_scores, "MSE": mses, "Pearson R": pearsonrs})
+df = pd.DataFrame({"R2": r2_scores, "RMSE": rmses, "Pearson R": pearsonrs})
 df.index = OUTER_FOLDS
 print(df)
 
