@@ -1,7 +1,7 @@
 import torch
 import pandas as pd
 from sklearn.metrics import mean_squared_error, r2_score
-from torchdiffeq import odeint_adjoint as odeint
+from train_predict_utils import sample_standard_gaussian
 
 
 def merge_predictions(evals_per_fold, reference_data):
@@ -18,16 +18,6 @@ def merge_predictions(evals_per_fold, reference_data):
     left_q1w = left[(left.DSFQ == 1) & (left.TIME >= 168)]
     left_q3w = left[(left.DSFQ == 3) & (left.TIME >= 504)]
     return pd.concat([left_q1w, left_q3w], ignore_index=False)
-
-
-def sample_standard_gaussian(mu, sigma):
-    device = torch.device("cpu")
-    if mu.is_cuda:
-        device = mu.get_device()
-
-    d = torch.distributions.normal.Normal(torch.Tensor([0.0]).to(device), torch.Tensor([1.0]).to(device))
-    r = d.sample(mu.size()).squeeze(-1)
-    return r * sigma.float() + mu.float()
 
 
 def compute_loss_on_train(criterion, labels, preds):
