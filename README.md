@@ -28,4 +28,4 @@ Only CUDA versions 10.2 and 11.3 are supported at the time of this writing. Plea
 for more details.
 
 ## How to Use
-Just run through `main.ipynb`. A lot of the code is in other files, which have been documented,
+Just run through `main.ipynb`. A lot of the code is in other files, which have been documented therein.
