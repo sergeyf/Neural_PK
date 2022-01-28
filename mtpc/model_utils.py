@@ -297,7 +297,7 @@ def compute_loss(encoder, ode_func, classifier, tol, latent_dim, dataloader, n_b
     if phase == "test":
         return {
             "PTNM": ptnms,
-            "TIME": Times,
+            "TIME": Times.cpu().numpy(),
             "labels": ground_truth.cpu().tolist(),
             "preds": predictions.cpu().tolist(),
             "loss": rmse_loss,

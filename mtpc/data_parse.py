@@ -19,7 +19,7 @@ class TDM1(Dataset):
 
         self.label_col = label_col
         self.features = feature_cols
-        self.data["TIME"] = self.data["TIME"] / 24
+        self.data.loc[:, "TIME"] = self.data["TIME"] / 24
 
     def __len__(self):
         return self.data.PTNM.unique().shape[0]
