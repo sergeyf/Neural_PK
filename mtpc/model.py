@@ -34,18 +34,16 @@ class ODEFunc(nn.Module):
                 nn.init.constant_(m.bias, val=0.5)
 
     def forward(self, t, x):
-        # print(x)
         return self.net(x)
 
 
 class Encoder(nn.Module):
-    def __init__(self, input_dim, output_dim, hidden_dim, device=torch.device("cpu")):
+    def __init__(self, input_dim, output_dim, hidden_dim):
         super(Encoder, self).__init__()
 
         self.output_dim = output_dim
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
-        self.device = device
 
         self.hiddens_to_output = nn.Sequential(
             nn.Linear(self.hidden_dim, self.hidden_dim),
@@ -54,17 +52,13 @@ class Encoder(nn.Module):
         )
         init_network_weights(self.hiddens_to_output, std=0.001)
 
-        # self.rnn = nn.RNN(self.input_dim, self.hidden_dim, nonlinearity="relu").to(device)
-        self.rnn = nn.GRU(self.input_dim, self.hidden_dim).to(device)
+        self.rnn = nn.GRU(self.input_dim, self.hidden_dim)
 
     def forward(self, data):
         data = data.permute(1, 0, 2)
         data = reverse(data)
         output_rnn, _ = self.rnn(data)
-        # print(output_rnn)
         outputs = self.hiddens_to_output(output_rnn[-1])
-        # print(outputs)
-
         return outputs
 
 
@@ -76,7 +70,6 @@ class Classifier(nn.Module):
             nn.SELU(),
             nn.Linear(32, output_dim),
         )
-
         init_network_weights(self.net, std=0.001)
 
     def forward(self, z, cmax_time):

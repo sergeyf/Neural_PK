@@ -19,13 +19,13 @@ conda activate neuralpk
 conda install pytorch==1.5 scipy==1.7.3 torchdiffeq==0.2.2 pandas==1.3.5 scikit-learn==1.0.2 jupyterlab tqdm 
 ``` 
 
-If you have a GPU, note your CUDA version and install the dependencies with the CUDA toolkit. For example,
-if you have CUDA 10.2, you can install the dependencies with the following command:
+If you have a GPU, you'll need to install CUDA 10.2 or 11.3. Then, install `pytorch` with `pip` as per instructions here: `https://pytorch.org/get-started/locally/`
+which will be different for your specific system and CUDA version. Do *not* use `conda`. 
+Also, the GPU version of `pytorch` 1.5.1 is not available any more, so you can install the latest `1.x` version.
+After you install `pytorch`, you can install the rest of the dependencies with `pip` also:
 ```
-conda install pytorch==1.5 scipy==1.7.3 torchdiffeq==0.2.2 pandas==1.3.5 scikit-learn==1.0.2 jupyterlab tqdm cudatoolkit=10.2 -c pytorch
+pip install scipy torchdiffeq pandas scikit-learn jupyterlab tqdm 
 ```
-Only CUDA versions 10.2 and 11.3 are supported at the time of this writing. Please see https://pytorch.org/get-started/locally/
-for more details.
 
 ## How to Use
 Just run through `main.ipynb`. A lot of the code is in other files, which have been documented therein.

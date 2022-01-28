@@ -24,6 +24,9 @@ def load_model(ckpt_path, input_dim, hidden_dim, latent_dim, ode_hidden_dim, dev
     if not os.path.exists(ckpt_path):
         raise Exception("Checkpoint " + ckpt_path + " does not exist.")
 
+    # choose whether to use a GPU if it is available
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
     # create the parts of the model into which we load our checkpoint state
     encoder = Encoder(input_dim=input_dim, output_dim=2 * latent_dim, hidden_dim=hidden_dim)
     ode_func = ODEFunc(input_dim=latent_dim, hidden_dim=ode_hidden_dim)
@@ -72,9 +75,9 @@ def train_neural_ode(
     input_dim = tdm1_obj["input_dim"]
 
     # put the model together
-    encoder = Encoder(input_dim=input_dim, output_dim=2 * latent_dim, hidden_dim=hidden_dim)
-    ode_func = ODEFunc(input_dim=latent_dim, hidden_dim=ode_hidden_dim)
-    classifier = Classifier(latent_dim=latent_dim, output_dim=1)
+    encoder = Encoder(input_dim=input_dim, output_dim=2 * latent_dim, hidden_dim=hidden_dim).to(device)
+    ode_func = ODEFunc(input_dim=latent_dim, hidden_dim=ode_hidden_dim).to(device)
+    classifier = Classifier(latent_dim=latent_dim, output_dim=1).to(device)
 
     # make the logs
     logger.info(input_cmd)
@@ -93,7 +96,7 @@ def train_neural_ode(
             # generate data batch
             ptnm, times, features, labels, cmax_time = tdm1_obj["train_dataloader"].__next__()
             # get predictions using current state of model
-            preds = predict(encoder, ode_func, classifier, tol, latent_dim, ptnm, times, features, cmax_time)
+            preds = predict(encoder, ode_func, classifier, tol, latent_dim, ptnm, times, features, cmax_time, device)
             idx_not_nan = ~(torch.isnan(labels) | (labels == -1))
             preds = preds[idx_not_nan]
             labels = labels[idx_not_nan]
@@ -177,21 +180,21 @@ def sample_standard_gaussian(mu, sigma):
     return r * sigma.float() + mu.float()
 
 
-def predict(encoder, ode_func, classifier, tol, latent_dim, ptnm, times, features, cmax_time):
+def predict(encoder, ode_func, classifier, tol, latent_dim, ptnm, times, features, cmax_time, device="cpu"):
     dosing = torch.zeros([features.size(0), features.size(1), latent_dim])
     dosing[:, :, 0] = features[:, :, -2]
-    dosing = dosing.permute(1, 0, 2)
+    dosing = dosing.permute(1, 0, 2).to(device)
 
-    encoder_out = encoder(features)
+    encoder_out = encoder(features.to(device))
     qz0_mean, qz0_var = encoder_out[:, :latent_dim], encoder_out[:, latent_dim:]
     z0 = sample_standard_gaussian(qz0_mean, qz0_var)
 
-    solves = z0.unsqueeze(0).clone()
+    solves = z0.unsqueeze(0).clone().to(device)
     try:
         for idx, (time0, time1) in enumerate(zip(times[:-1], times[1:])):
             z0 += dosing[idx]
             time_interval = torch.Tensor([time0 - time0, time1 - time0])
-            sol = odeint(ode_func, z0, time_interval, rtol=tol, atol=tol)
+            sol = odeint(ode_func.to(device), z0.to(device), time_interval.to(device), rtol=tol, atol=tol)
             z0 = sol[-1].clone()
             solves = torch.cat([solves, sol[-1:, :]], 0)
     except AssertionError:
@@ -272,7 +275,7 @@ def compute_loss(encoder, ode_func, classifier, tol, latent_dim, dataloader, n_b
 
     for _ in range(n_batches):
         ptnm, times, features, labels, cmax_time = dataloader.__next__()
-        preds = predict(encoder, ode_func, classifier, tol, latent_dim, ptnm, times, features, cmax_time)
+        preds = predict(encoder, ode_func, classifier, tol, latent_dim, ptnm, times, features, cmax_time, device)
 
         idx_not_nan = ~(torch.isnan(labels) | (labels == -1))
         preds = preds[idx_not_nan]
