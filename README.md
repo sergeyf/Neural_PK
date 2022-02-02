@@ -8,6 +8,11 @@ The original code for this paper and the example data were shared here: https://
 This repository refactors the original code and puts the functionality in a single Jupyter notebook,
 accompanied by various scripts that contain helpful utilities and wrappers. A few small bugs have been fixed.
 
+Workflow             |  Model Schemata
+:-------------------------:|:-------------------------:
+![](figures/figure1.png)  |  ![](figures/figure2.png)
+
+
 ## Installation
 
 Installation is easiest with Anaconda. Once you have it installed, execute the following in the Anaconda prompt:
