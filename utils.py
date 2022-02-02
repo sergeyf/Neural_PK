@@ -1,6 +1,5 @@
 import os
 import logging
-import torch
 
 
 def makedirs(dirname):
