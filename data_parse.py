@@ -1,4 +1,3 @@
-import utils
 import torch
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
@@ -19,6 +18,8 @@ class TDM1(Dataset):
 
         self.label_col = label_col
         self.features = feature_cols
+        # neural networks like inputs to be on similar scales
+        # so normalizing into days here
         self.data.loc[:, "TIME"] = self.data["TIME"] / 24
 
     def __len__(self):
@@ -50,7 +51,11 @@ class TDM1(Dataset):
         else:
             cmax_time_full[:] = cmax_time[:20]
 
+        # normalizing PK_round1 to be on similar scales to other variables
         data.loc[:, "PK_round1"] = data["PK_round1"] / cmax
+
+        # note that PK_timeCourse (the label) is not normalized
+        # but training may be easier if it was
 
         features = data[self.features].values
         labels = data[self.label_col].values
@@ -64,37 +69,41 @@ class TDM1(Dataset):
 
 
 def tdm1_collate_fn(batch, device):
+    """This function collates the elements of the batch
+    into the format expected by the neural network
+    """
     D = batch[0][2].shape[1]
     N = 1
 
-    combined_tt, inverse_indices = torch.unique(torch.cat([ex[1] for ex in batch]), sorted=True, return_inverse=True)
-    combined_tt = combined_tt.to(device)
-    # print(combined_tt, inverse_indices)
+    # from the paper: In the encoding step, a GRU layer with 128 hidden units scans through the whole time series
+    # (5 channel input, TFDS, TIME, CYCL, AMT, and PK_cycle1, as in LSTM model) reversely (i.e., from the end to the start)
+    combined_times, inverse_indices = torch.unique(torch.cat([ex[1] for ex in batch]), sorted=True, return_inverse=True)
+    combined_times = combined_times.to(device)
 
-    offset = 0
-    combined_features = torch.zeros([len(batch), len(combined_tt), D]).to(device)
-    combined_label = torch.zeros([len(batch), len(combined_tt), N]).to(device)
+    combined_features = torch.zeros([len(batch), len(combined_times), D]).to(device)
+    combined_label = torch.zeros([len(batch), len(combined_times), N]).to(device)
     combined_label[:] = np.nan
     combined_cmax_time = torch.zeros([len(batch), 20]).to(device)
-    # print(combined_label.shape)
 
     ptnms = []
-    for b, (ptnm, tt, features, label, cmax_time) in enumerate(batch):
+    offset = 0
+    for b, (ptnm, times, features, label, cmax_time) in enumerate(batch):
         ptnms.append(ptnm)
-        tt = tt.to(device)
+
+        times = times.to(device)
         features = features.to(device)
         label = label.to(device)
         cmax_time = cmax_time.to(device)
 
-        indices = inverse_indices[offset : offset + len(tt)]
-        offset += len(tt)
+        indices = inverse_indices[offset : offset + len(times)]
+        offset += len(times)
 
         combined_features[b, indices] = features.float()
         combined_label[b, indices] = label.float()
         combined_cmax_time[b, :] = cmax_time.float()
-    combined_tt = combined_tt.float()
+    combined_times = combined_times.float()
 
-    return ptnms, combined_tt, combined_features, combined_label, combined_cmax_time
+    return ptnms, combined_times, combined_features, combined_label, combined_cmax_time
 
 
 def inf_generator(iterable):
