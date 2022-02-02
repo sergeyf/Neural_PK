@@ -20,12 +20,13 @@ utils.makedirs("logs/")
 logger = utils.get_logger(logpath=log_path)
 
 
-def load_model(ckpt_path, input_dim, hidden_dim, latent_dim, ode_hidden_dim, device="cpu"):
+# choose whether to use a GPU if it is available
+DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+
+def load_model(ckpt_path, input_dim, hidden_dim, latent_dim, ode_hidden_dim):
     if not os.path.exists(ckpt_path):
         raise Exception("Checkpoint " + ckpt_path + " does not exist.")
-
-    # choose whether to use a GPU if it is available
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     # create the parts of the model into which we load our checkpoint state
     encoder = Encoder(input_dim=input_dim, output_dim=2 * latent_dim, hidden_dim=hidden_dim)
@@ -38,15 +39,15 @@ def load_model(ckpt_path, input_dim, hidden_dim, latent_dim, ode_hidden_dim, dev
     # load checkpoint states into each part of model
     encoder_state = checkpt["encoder"]
     encoder.load_state_dict(encoder_state)
-    encoder.to(device)
+    encoder.to(DEVICE)
 
     ode_state = checkpt["ode"]
     ode_func.load_state_dict(ode_state)
-    ode_func.to(device)
+    ode_func.to(DEVICE)
 
     classifier_state = checkpt["classifier"]
     classifier.load_state_dict(classifier_state)
-    classifier.to(device)
+    classifier.to(DEVICE)
 
     return encoder, ode_func, classifier
 
@@ -59,8 +60,6 @@ TRAINING
 def train_neural_ode(
     random_seed, train, validate, model, fold, lr, tol, epochs, l2, hidden_dim, latent_dim, ode_hidden_dim
 ):
-    # choose whether to use a GPU if it is available
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     # set various seeds for complete reproducibility
     torch.manual_seed(random_seed)
@@ -77,15 +76,15 @@ def train_neural_ode(
     input_dim = tdm1_obj["input_dim"]
 
     # put the model together
-    encoder = Encoder(input_dim=input_dim, output_dim=2 * latent_dim, hidden_dim=hidden_dim).to(device)
-    ode_func = ODEFunc(input_dim=latent_dim, hidden_dim=ode_hidden_dim).to(device)
-    classifier = Classifier(latent_dim=latent_dim, output_dim=1).to(device)
+    encoder = Encoder(input_dim=input_dim, output_dim=2 * latent_dim, hidden_dim=hidden_dim).to(DEVICE)
+    ode_func = ODEFunc(input_dim=latent_dim, hidden_dim=ode_hidden_dim).to(DEVICE)
+    classifier = Classifier(latent_dim=latent_dim, output_dim=1).to(DEVICE)
 
     # make the logs
     logger.info(input_cmd)
 
     batches_per_epoch = tdm1_obj["n_train_batches"]
-    criterion = nn.MSELoss().to(device=device)  # mean squared error loss
+    criterion = nn.MSELoss().to(device=DEVICE)  # mean squared error loss
     params = list(encoder.parameters()) + list(ode_func.parameters()) + list(classifier.parameters())
     optimizer = optim.Adam(params, lr=lr, weight_decay=l2)  # most common neural network optimizer
     best_rmse = 0x7FFFFFFF  # initialize the best rmse to a very large number
@@ -98,7 +97,7 @@ def train_neural_ode(
             # generate data batch
             ptnm, times, features, labels, cmax_time = tdm1_obj["train_dataloader"].__next__()
             # get predictions using current state of model
-            preds = predict(encoder, ode_func, classifier, tol, latent_dim, ptnm, times, features, cmax_time, device)
+            preds = predict(encoder, ode_func, classifier, tol, latent_dim, ptnm, times, features, cmax_time)
             idx_not_nan = ~(torch.isnan(labels) | (labels == -1))
             preds = preds[idx_not_nan]
             labels = labels[idx_not_nan]
@@ -125,7 +124,6 @@ def train_neural_ode(
                 latent_dim,
                 tdm1_obj["train_dataloader"],
                 tdm1_obj["n_train_batches"],
-                device,
                 phase="train",
             )
 
@@ -138,7 +136,6 @@ def train_neural_ode(
                 latent_dim,
                 tdm1_obj["val_dataloader"],
                 tdm1_obj["n_val_batches"],
-                device,
                 phase="validate",
             )
 
@@ -173,20 +170,16 @@ PREDICTION
 
 
 def sample_standard_gaussian(mu, sigma):
-    device = torch.device("cpu")
-    if mu.is_cuda:
-        device = mu.get_device()
-
-    d = torch.distributions.normal.Normal(torch.Tensor([0.0]).to(device), torch.Tensor([1.0]).to(device))
+    d = torch.distributions.normal.Normal(torch.Tensor([0.0]).to(DEVICE), torch.Tensor([1.0]).to(DEVICE))
     r = d.sample(mu.size()).squeeze(-1)
     return r * sigma.float() + mu.float()
 
 
-def predict(encoder, ode_func, classifier, tol, latent_dim, ptnm, times, features, cmax_time, device="cpu"):
+def predict(encoder, ode_func, classifier, tol, latent_dim, ptnm, times, features, cmax_time):
     # generate dosing information to integrate into the latent features that go into the ODE solver
     dosing = torch.zeros([features.size(0), features.size(1), latent_dim])
     dosing[:, :, 0] = features[:, :, -2]
-    dosing = dosing.permute(1, 0, 2).to(device)
+    dosing = dosing.permute(1, 0, 2).to(DEVICE)
 
     # Get encoder output and sample latent features from a gaussian latent
     # distribution. Uses the first half of encoder output to estimate mean
@@ -195,19 +188,19 @@ def predict(encoder, ode_func, classifier, tol, latent_dim, ptnm, times, feature
     # variables.
     # The authors never discuss and it is unclear to us why they chose this
     # method over learning latent variable values directly.
-    encoder_out = encoder(features.to(device))
+    encoder_out = encoder(features.to(DEVICE))
     qz0_mean, qz0_var = encoder_out[:, :latent_dim], encoder_out[:, latent_dim:]
     z0 = sample_standard_gaussian(qz0_mean, qz0_var)
 
     # add sampled latent variable value as initial state of solver
-    solves = z0.unsqueeze(0).clone().to(device)
+    solves = z0.unsqueeze(0).clone().to(DEVICE)
     try:
         # iterate through time intervals
         for idx, (time0, time1) in enumerate(zip(times[:-1], times[1:])):
             z0 += dosing[idx]  # add dosing information
             time_interval = torch.Tensor([time0 - time0, time1 - time0])  # compute time interval
             # use ODE solver to integrate dosing information and time interval
-            sol = odeint(ode_func.to(device), z0.to(device), time_interval.to(device), rtol=tol, atol=tol)
+            sol = odeint(ode_func.to(DEVICE), z0.to(DEVICE), time_interval.to(DEVICE), rtol=tol, atol=tol)
             # feed output of ODE solver to next time point
             z0 = sol[-1].clone()
             # assemble ODE solver outputs for time intervals
@@ -248,19 +241,16 @@ def predict_using_trained_model(test, model, fold, tol, hidden_dim, latent_dim, 
     This method loads the best available model for the specified training and generates predictions.
     Intended to generate predictions on validation and test sets.
     """
-    # choose whether to use a GPU if it is available
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
     # the model checkpoints and evaluation results will be stored in these directories
     ckpt_path = os.path.join(f"fold_{fold}", f"fold_{fold}_model_{model}.ckpt")
     eval_path = os.path.join(f"fold_{fold}", f"fold_{fold}_model_{model}.csv")
 
     # create the test data object
-    tdm1_obj = parse_tdm1(device, None, None, test, phase="test")
+    tdm1_obj = parse_tdm1(DEVICE, None, None, test, phase="test")
     input_dim = tdm1_obj["input_dim"]
 
     # load best trained model
-    encoder, ode_func, classifier = load_model(ckpt_path, input_dim, hidden_dim, latent_dim, ode_hidden_dim, device)
+    encoder, ode_func, classifier = load_model(ckpt_path, input_dim, hidden_dim, latent_dim, ode_hidden_dim)
 
     ## Predict & Evaluate
     with torch.no_grad():
@@ -272,7 +262,6 @@ def predict_using_trained_model(test, model, fold, tol, hidden_dim, latent_dim, 
             latent_dim,
             tdm1_obj["test_dataloader"],
             tdm1_obj["n_test_batches"],
-            device,
             phase="test",
         )
 
@@ -288,15 +277,15 @@ EVALUATION
 """
 
 
-def compute_loss(encoder, ode_func, classifier, tol, latent_dim, dataloader, n_batches, device, phase):
+def compute_loss(encoder, ode_func, classifier, tol, latent_dim, dataloader, n_batches, phase):
     ptnms = []
-    Times = torch.Tensor([]).to(device=device)
-    predictions = torch.Tensor([]).to(device=device)
-    ground_truth = torch.Tensor([]).to(device=device)
+    Times = torch.Tensor([]).to(device=DEVICE)
+    predictions = torch.Tensor([]).to(device=DEVICE)
+    ground_truth = torch.Tensor([]).to(device=DEVICE)
 
     for _ in range(n_batches):
         ptnm, times, features, labels, cmax_time = dataloader.__next__()
-        preds = predict(encoder, ode_func, classifier, tol, latent_dim, ptnm, times, features, cmax_time, device)
+        preds = predict(encoder, ode_func, classifier, tol, latent_dim, ptnm, times, features, cmax_time)
 
         idx_not_nan = ~(torch.isnan(labels) | (labels == -1))
         preds = preds[idx_not_nan]
