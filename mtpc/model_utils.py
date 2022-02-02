@@ -215,6 +215,10 @@ def merge_predictions(evals_per_fold, reference_data):
     left["pred_agg"] = left[preds].agg("mean", axis=1)
 
     ref = reference_data[["PTNM", "DSFQ"]].drop_duplicates()
+    # just making sure the two columns that we are joining on have the same type
+    # or else there would be an error
+    ref.loc[:, "PTNM"] = ref["PTNM"].astype(int)
+    left.loc[:, "PTNM"] = left["PTNM"].astype(int)
     left = left.merge(ref, on="PTNM", how="left")
     # get rid of the first round of treatment
     left_q1w = left[(left.DSFQ == 1) & (left.TIME >= 168)]
