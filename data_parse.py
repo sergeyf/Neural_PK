@@ -97,6 +97,18 @@ def tdm1_collate_fn(batch, device):
     return ptnms, combined_tt, combined_features, combined_label, combined_cmax_time
 
 
+def inf_generator(iterable):
+    """Allows training with DataLoaders in a single infinite loop:
+    for i, (x, y) in enumerate(inf_generator(train_loader)):
+    """
+    iterator = iterable.__iter__()
+    while True:
+        try:
+            yield iterator.__next__()
+        except StopIteration:
+            iterator = iterable.__iter__()
+
+
 def parse_tdm1(device, train, validate, test, phase="train"):
     """This function constructs the dataset iterators that pytorch needs"""
     feature_cols = ["TFDS", "TIME", "CYCL", "AMT", "PK_round1"]

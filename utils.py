@@ -1,7 +1,6 @@
 import os
 import logging
 import torch
-import torch.nn as nn
 
 
 def makedirs(dirname):
@@ -47,15 +46,3 @@ def get_logger(logpath, displaying=True, saving=True, debug=False):
         logger.addHandler(console_handler)
 
     return logger
-
-
-def inf_generator(iterable):
-    """Allows training with DataLoaders in a single infinite loop:
-    for i, (x, y) in enumerate(inf_generator(train_loader)):
-    """
-    iterator = iterable.__iter__()
-    while True:
-        try:
-            yield iterator.__next__()
-        except StopIteration:
-            iterator = iterable.__iter__()
