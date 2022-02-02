@@ -126,8 +126,8 @@ def parse_tdm1(device, train, validate, test, phase="train"):
         )
 
         dataset_objs = {
-            "train_dataloader": utils.inf_generator(train_dataloader),
-            "val_dataloader": utils.inf_generator(val_dataloader),
+            "train_dataloader": inf_generator(train_dataloader),
+            "val_dataloader": inf_generator(val_dataloader),
             "n_train_batches": len(train_dataloader),
             "n_val_batches": len(val_dataloader),
             "input_dim": features.size(-1),
@@ -141,7 +141,7 @@ def parse_tdm1(device, train, validate, test, phase="train"):
         )
 
         dataset_objs = {
-            "test_dataloader": utils.inf_generator(test_dataloader),
+            "test_dataloader": inf_generator(test_dataloader),
             "n_test_batches": len(test_dataloader),
             "input_dim": features.size(-1),
         }
