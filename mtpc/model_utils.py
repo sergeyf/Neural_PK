@@ -188,9 +188,13 @@ def predict(encoder, ode_func, classifier, tol, latent_dim, ptnm, times, feature
     dosing[:, :, 0] = features[:, :, -2]
     dosing = dosing.permute(1, 0, 2).to(device)
 
-    # get encoder output and sample latent features from a gaussian latent
-    # distribution. uses the first half of encoder output to estimate mean
-    # and the second half to estimate variance
+    # Get encoder output and sample latent features from a gaussian latent
+    # distribution. Uses the first half of encoder output to estimate mean
+    # and the second half to estimate variance. This technique is inspired
+    # by a variational autoencoder, which learns distributions for latent
+    # variables.
+    # The authors never discuss and it is unclear to us why they chose this
+    # method over learning latent variable values directly.
     encoder_out = encoder(features.to(device))
     qz0_mean, qz0_var = encoder_out[:, :latent_dim], encoder_out[:, latent_dim:]
     z0 = sample_standard_gaussian(qz0_mean, qz0_var)
@@ -206,7 +210,7 @@ def predict(encoder, ode_func, classifier, tol, latent_dim, ptnm, times, feature
             sol = odeint(ode_func.to(device), z0.to(device), time_interval.to(device), rtol=tol, atol=tol)
             # feed output of ODE solver to next time point
             z0 = sol[-1].clone()
-            # asseble ODE solver outputs for time intervals
+            # assemble ODE solver outputs for time intervals
             solves = torch.cat([solves, sol[-1:, :]], 0)
     except AssertionError:
         print(times)
