@@ -72,7 +72,7 @@ def train_neural_ode(
     # for the logging we'll have this informative string
     input_cmd = f"--fold {fold} --model {model} --lr {lr} --tol {tol} --epochs {epochs} --l2 {l2} --hidden_dim {hidden_dim} --laten_dim {latent_dim}"
 
-    tdm1_obj = parse_tdm1(device, train, validate, None, phase="train")
+    tdm1_obj = parse_tdm1(DEVICE, train, validate, None, phase="train")
     input_dim = tdm1_obj["input_dim"]
 
     # put the model together
@@ -170,6 +170,7 @@ PREDICTION
 
 
 def sample_standard_gaussian(mu, sigma):
+    # samples feature value from latent feature distribution defined by mu and sigma
     d = torch.distributions.normal.Normal(torch.Tensor([0.0]).to(DEVICE), torch.Tensor([1.0]).to(DEVICE))
     r = d.sample(mu.size()).squeeze(-1)
     return r * sigma.float() + mu.float()
@@ -217,6 +218,10 @@ def predict(encoder, ode_func, classifier, tol, latent_dim, ptnm, times, feature
 
 
 def merge_predictions(evals_per_fold, reference_data):
+    """
+    This function carries out the ensembling of the predictions
+    produced by the different folds.
+    """
     cols = ["PTNM", "TIME", "preds", "labels"]
     left = evals_per_fold[0][cols]
     for right in evals_per_fold[1:]:
@@ -278,19 +283,29 @@ EVALUATION
 
 
 def compute_loss(encoder, ode_func, classifier, tol, latent_dim, dataloader, n_batches, phase):
+    """
+    This function generates predictions based on trained encoder, ode_func, classifier
+    that comprise a trained model, then evaluates the predictions by computing RMSE and R2.
+
+    This function is used in the training loop to compute the loss used to make parameter updates.
+    """
     ptnms = []
     Times = torch.Tensor([]).to(device=DEVICE)
     predictions = torch.Tensor([]).to(device=DEVICE)
     ground_truth = torch.Tensor([]).to(device=DEVICE)
 
     for _ in range(n_batches):
+        # load batch of data and make predictions
         ptnm, times, features, labels, cmax_time = dataloader.__next__()
         preds = predict(encoder, ode_func, classifier, tol, latent_dim, ptnm, times, features, cmax_time)
 
+        # do not keep predictions for samples with missing labels
         idx_not_nan = ~(torch.isnan(labels) | (labels == -1))
         preds = preds[idx_not_nan]
         labels = labels[idx_not_nan]
 
+        # format patient number and times variables for aligned sample
+        # info when the predicition data is returned below
         if phase == "test":
             times = times[idx_not_nan.flatten()]
             ptnms += ptnm * len(times)
@@ -301,9 +316,12 @@ def compute_loss(encoder, ode_func, classifier, tol, latent_dim, dataloader, n_b
         predictions = torch.cat((predictions, preds))
         ground_truth = torch.cat((ground_truth, labels))
 
+    # compute loss
     rmse_loss = mean_squared_error(ground_truth.cpu().numpy(), predictions.cpu().numpy(), squared=False)
     r2 = r2_score(ground_truth.cpu().numpy(), predictions.cpu().numpy())
 
+    # return formatted prediciton and evaluation results for test
+    # otherwise return evaluation results for use in training loop
     if phase == "test":
         return {
             "PTNM": ptnms,
