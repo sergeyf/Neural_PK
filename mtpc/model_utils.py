@@ -32,8 +32,10 @@ def load_model(ckpt_path, input_dim, hidden_dim, latent_dim, ode_hidden_dim, dev
     ode_func = ODEFunc(input_dim=latent_dim, hidden_dim=ode_hidden_dim)
     classifier = Classifier(latent_dim=latent_dim, output_dim=1)
 
+    # load model checkpoint
     checkpt = torch.load(ckpt_path)
 
+    # load checkpoint states into each part of model
     encoder_state = checkpt["encoder"]
     encoder.load_state_dict(encoder_state)
     encoder.to(device)
@@ -181,26 +183,41 @@ def sample_standard_gaussian(mu, sigma):
 
 
 def predict(encoder, ode_func, classifier, tol, latent_dim, ptnm, times, features, cmax_time, device="cpu"):
+    # generate dosing information to integrate into the latent features that go into the ODE solver
     dosing = torch.zeros([features.size(0), features.size(1), latent_dim])
     dosing[:, :, 0] = features[:, :, -2]
     dosing = dosing.permute(1, 0, 2).to(device)
 
+    # Get encoder output and sample latent features from a gaussian latent
+    # distribution. Uses the first half of encoder output to estimate mean
+    # and the second half to estimate variance. This technique is inspired
+    # by a variational autoencoder, which learns distributions for latent
+    # variables.
+    # The authors never discuss and it is unclear to us why they chose this
+    # method over learning latent variable values directly.
     encoder_out = encoder(features.to(device))
     qz0_mean, qz0_var = encoder_out[:, :latent_dim], encoder_out[:, latent_dim:]
     z0 = sample_standard_gaussian(qz0_mean, qz0_var)
 
+    # add sampled latent variable value as initial state of solver
     solves = z0.unsqueeze(0).clone().to(device)
     try:
+        # iterate through time intervals
         for idx, (time0, time1) in enumerate(zip(times[:-1], times[1:])):
-            z0 += dosing[idx]
-            time_interval = torch.Tensor([time0 - time0, time1 - time0])
+            z0 += dosing[idx]  # add dosing information
+            time_interval = torch.Tensor([time0 - time0, time1 - time0])  # compute time interval
+            # use ODE solver to integrate dosing information and time interval
             sol = odeint(ode_func.to(device), z0.to(device), time_interval.to(device), rtol=tol, atol=tol)
+            # feed output of ODE solver to next time point
             z0 = sol[-1].clone()
+            # assemble ODE solver outputs for time intervals
             solves = torch.cat([solves, sol[-1:, :]], 0)
     except AssertionError:
         print(times)
         print(time0, time1, time_interval, ptnm)
 
+    # decoder step, in which we feed the above ODE solver outputs per time
+    # interval concatenated with time and PK reponse for first cycle
     preds = classifier(solves, cmax_time).permute(1, 0, 2)
 
     return preds
