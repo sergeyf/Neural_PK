@@ -11,6 +11,17 @@ def data_split(df, on_col, seed, test_size=0.2):
     return train_df, test_df
 
 
+def data_split_cross(df):
+    """
+    Splits for cross-schedule prediction as follows:
+     Train on 3-week dosing
+     Test on 1-week dosing
+    """
+    train_df = df[df.DSFQ == 3]
+    test_df = df[df.DSFQ == 1]
+    return train_df, test_df
+
+
 def augment_data(train):
     """
     They add extra data to the training set made out of existing training data.
